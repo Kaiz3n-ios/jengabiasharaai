@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { streamChatMessage } from '../services/geminiService';
 import { ChatMessage } from '../types';
-import { PaperAirplaneIcon } from './IconComponents';
+import { PaperAirplaneIcon, SparklesIcon } from './IconComponents';
 
 const Chatbot: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -17,6 +17,13 @@ const Chatbot: React.FC = () => {
     'Preparing your advice...'
   ];
 
+  const examplePrompts = [
+    "Write a catchy Instagram caption for a new red dress.",
+    "What are 3 ways to market handmade jewelry on a budget?",
+    "Give me a short, friendly sales pitch for a customer asking about my products.",
+    "How can I take better product photos using just my smartphone?",
+  ];
+
   useEffect(() => {
       setMessages([{ sender: 'ai', text: "Hello! I'm Jenga, your AI business assistant. How can I help you build today?"}]);
   }, []);
@@ -29,10 +36,11 @@ const Chatbot: React.FC = () => {
     scrollToBottom();
   }, [messages]);
 
-  const handleSendMessage = async () => {
-    if (!input.trim()) return;
-    const currentInput = input;
-    const userMessage: ChatMessage = { sender: 'user', text: currentInput };
+  const handleSendMessage = async (messageOverride?: string) => {
+    const messageToSend = messageOverride || input;
+    if (!messageToSend.trim()) return;
+
+    const userMessage: ChatMessage = { sender: 'user', text: messageToSend };
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
@@ -45,7 +53,7 @@ const Chatbot: React.FC = () => {
     }, 2500); // Cycle every 2.5 seconds
 
     try {
-      const stream = await streamChatMessage(currentInput);
+      const stream = await streamChatMessage(messageToSend);
       let aiResponseText = '';
       let aiMessageExists = false;
 
@@ -83,22 +91,47 @@ const Chatbot: React.FC = () => {
         <h2 className="text-xl font-bold text-amber-400">AI Assistant</h2>
         <p className="text-sm text-gray-400">Ask for marketing, sales, or branding advice.</p>
       </div>
-      <div className="flex-1 p-4 overflow-y-auto space-y-4">
-        {messages.map((msg, index) => (
-          <div key={index} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-xs md:max-w-md lg:max-w-2xl px-4 py-2 rounded-2xl ${msg.sender === 'user' ? 'bg-amber-500 text-gray-900' : 'bg-gray-700 text-gray-200'}`}>
-              <p className="whitespace-pre-wrap">{msg.text}</p>
+      <div className="flex-1 p-4 overflow-y-auto">
+        {messages.length <= 1 ? (
+          <div className="flex h-full items-center justify-center">
+            <div className="p-4 bg-gray-900/50 rounded-lg border border-gray-700 max-w-2xl w-full">
+              <div className="flex items-center justify-center gap-2 mb-4 text-amber-400">
+                <SparklesIcon />
+                <h3 className="font-semibold text-gray-300 text-center">Not sure where to start? Try one of these:</h3>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {examplePrompts.map((prompt, index) => (
+                  <button
+                    key={index}
+                    onClick={() => handleSendMessage(prompt)}
+                    disabled={isLoading}
+                    className="text-left p-3 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm text-gray-300 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
-        ))}
-        {isLoading && messages[messages.length - 1]?.sender === 'user' && (
-             <div className="flex justify-start">
-                <div className="max-w-xs px-4 py-2 rounded-2xl bg-gray-700 text-gray-200">
-                   <p className="italic text-gray-400">{loadingMessage}</p>
+        ) : (
+          <div className="space-y-4">
+            {messages.map((msg, index) => (
+              <div key={index} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-xs md:max-w-md lg:max-w-2xl px-4 py-2 rounded-2xl ${msg.sender === 'user' ? 'bg-amber-500 text-gray-900' : 'bg-gray-700 text-gray-200'}`}>
+                  <p className="whitespace-pre-wrap">{msg.text}</p>
                 </div>
-            </div>
+              </div>
+            ))}
+            {isLoading && messages[messages.length - 1]?.sender === 'user' && (
+              <div className="flex justify-start">
+                <div className="max-w-xs px-4 py-2 rounded-2xl bg-gray-700 text-gray-200">
+                  <p className="italic text-gray-400">{loadingMessage}</p>
+                </div>
+              </div>
+            )}
+            <div ref={messagesEndRef} />
+          </div>
         )}
-        <div ref={messagesEndRef} />
       </div>
       <div className="p-4 border-t border-gray-700">
         <div className="flex items-center space-x-2">
@@ -112,9 +145,9 @@ const Chatbot: React.FC = () => {
             disabled={isLoading}
           />
           <button
-            onClick={handleSendMessage}
-            disabled={isLoading}
-            className="bg-amber-500 hover:bg-amber-600 disabled:bg-gray-600 text-gray-900 p-2 rounded-full transition duration-300"
+            onClick={() => handleSendMessage()}
+            disabled={isLoading || !input.trim()}
+            className="bg-amber-500 hover:bg-amber-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-gray-900 p-2 rounded-full transition duration-300"
           >
             <PaperAirplaneIcon />
           </button>

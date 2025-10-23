@@ -1,14 +1,15 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { fileToDataUrl, fileToBase64 } from '../services/utils';
 import { editImageWithPrompt } from '../services/geminiService';
 import Spinner from './Spinner';
-import { ArrowDownTrayIcon, InformationCircleIcon, ArrowPathIcon } from './IconComponents';
+import { ArrowDownTrayIcon, InformationCircleIcon, ArrowPathIcon, UndoIcon, RedoIcon } from './IconComponents';
 import ImageModal from './ImageModal';
 import PromptAssistant from './PromptAssistant';
 import { PhotoShootResult } from '../App';
 
 interface ImageEditorProps {
   onGenerationComplete: (result: PhotoShootResult) => void;
+  showToast: (message: string) => void;
 }
 
 const imageEditorCategories = [
@@ -19,9 +20,10 @@ const imageEditorCategories = [
   { title: 'Lighting', key: 'lighting', options: ['Bright studio lighting', 'Golden hour sunlight', 'Soft natural light'] },
 ];
 
-const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete }) => {
+const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete, showToast }) => {
   const [originalImage, setOriginalImage] = useState<string | null>(null);
-  const [editedImage, setEditedImage] = useState<string | null>(null);
+  const [history, setHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState<number>(-1);
   const [file, setFile] = useState<File | null>(null);
   const [modelFile, setModelFile] = useState<File | null>(null);
   const [modelImagePreview, setModelImagePreview] = useState<string | null>(null);
@@ -32,6 +34,16 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete }) => {
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [modalImageUrl, setModalImageUrl] = useState<string | null>(null);
+
+  const currentImage = history[historyIndex];
+  const canUndo = historyIndex > 0;
+  const canRedo = historyIndex < history.length - 1;
+
+  useEffect(() => {
+      if (currentImage) {
+          onGenerationComplete({ imageUrl: currentImage, selections });
+      }
+  }, [currentImage, selections, onGenerationComplete]);
 
   const openModal = (url: string) => setModalImageUrl(url);
   const closeModal = () => setModalImageUrl(null);
@@ -80,7 +92,8 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete }) => {
   const processFile = useCallback(async (selectedFile: File) => {
     setFile(null);
     setOriginalImage(null);
-    setEditedImage(null);
+    setHistory([]);
+    setHistoryIndex(-1);
     setError(null);
     setIsProcessing(true);
 
@@ -145,7 +158,6 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete }) => {
 
     setIsLoading(true);
     setError(null);
-    setEditedImage(null);
 
     try {
       const productBase64 = await fileToBase64(file);
@@ -159,15 +171,18 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete }) => {
       
       const resultBase64 = await editImageWithPrompt(productBase64, file.type, prompt, modelBase64, modelMimeType);
       const resultUrl = `data:image/png;base64,${resultBase64}`;
-      setEditedImage(resultUrl);
-      onGenerationComplete({ imageUrl: resultUrl, selections });
+      
+      const newHistory = history.slice(0, historyIndex + 1);
+      const updatedHistory = [...newHistory, resultUrl];
+      setHistory(updatedHistory);
+      setHistoryIndex(updatedHistory.length - 1);
     } catch (e) {
       setError("Failed to edit image. Please try again.");
       console.error(e);
     } finally {
       setIsLoading(false);
     }
-  }, [file, prompt, modelFile, hasConsent, selections, onGenerationComplete]);
+  }, [file, prompt, modelFile, hasConsent, history, historyIndex]);
 
   const handleDownload = (dataUrl: string, filename: string) => {
     const link = document.createElement('a');
@@ -176,8 +191,21 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete }) => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    showToast('Download started...');
   };
   
+  const handleUndo = () => {
+    if (canUndo) {
+        setHistoryIndex(historyIndex - 1);
+    }
+  };
+
+  const handleRedo = () => {
+    if (canRedo) {
+        setHistoryIndex(historyIndex + 1);
+    }
+  };
+
   const disabledOptions = modelFile ? { 
     model: 'Disabled when using your own model photo.',
     ethnicity: 'Disabled when using your own model photo.',
@@ -190,40 +218,54 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete }) => {
         <h2 className="text-2xl font-bold text-amber-400">Step 1: The Photo Shoot</h2>
         <p className="mt-2 text-gray-400">Create your base product image on a virtual model.</p>
       </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Input & Controls */}
+      
+      {/* Controls */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-gray-800/50 p-6 rounded-lg space-y-4 border border-gray-700">
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">1. Upload Your Product Photo</label>
             <div
               onPaste={handlePaste}
               tabIndex={0}
-              className="mt-1 flex flex-col items-center justify-center rounded-md border-2 border-dashed border-gray-600 px-6 pt-5 pb-6 transition-colors hover:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-gray-900"
+              className="mt-1 flex flex-col items-center justify-center rounded-md border-2 border-dashed border-gray-600 p-4 transition-colors hover:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-gray-900 min-h-[16rem]"
             >
-              <label
-                htmlFor="file-upload"
-                className="relative cursor-pointer w-full h-full flex flex-col items-center justify-center"
-              >
               {isProcessing ? (
                 <div className="text-center py-4">
                   <Spinner />
                   <p className="mt-2 text-sm text-gray-400">Processing image...</p>
                 </div>
+              ) : originalImage ? (
+                <div className="relative w-full text-center">
+                  <img
+                    src={originalImage}
+                    alt="Original upload"
+                    className="object-contain max-h-48 mx-auto rounded-md cursor-pointer"
+                    onClick={() => openModal(originalImage)}
+                  />
+                  <label
+                    htmlFor="file-upload"
+                    className="absolute -bottom-2 -right-2 bg-amber-500 text-gray-900 rounded-full p-2 cursor-pointer hover:bg-amber-600 transition-all shadow-lg hover:shadow-xl focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-amber-500"
+                    title="Change photo"
+                  >
+                    <ArrowPathIcon />
+                  </label>
+                </div>
               ) : (
-                <div className="space-y-1 text-center">
+                <label
+                  htmlFor="file-upload"
+                  className="relative cursor-pointer w-full h-full flex flex-col items-center justify-center text-center p-6"
+                >
                   <svg className="mx-auto h-12 w-12 text-gray-500" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true"><path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                  <div className="flex text-sm text-gray-400">
+                  <div className="mt-4 flex flex-wrap justify-center text-sm text-gray-400">
                     <p className="font-medium text-amber-400">
                       Click to upload
                     </p>
                     <p className="pl-1">or drag, drop, or paste</p>
                   </div>
-                  <p className="text-xs text-gray-500">PNG, JPG, GIF up to 10MB</p>
-                </div>
+                  <p className="mt-1 text-xs text-gray-500">PNG, JPG, GIF up to 10MB</p>
+                </label>
               )}
-                <input id="file-upload" name="file-upload" type="file" className="sr-only" onChange={handleFileChange} accept="image/*" disabled={isProcessing} />
-              </label>
+              <input id="file-upload" name="file-upload" type="file" className="sr-only" onChange={handleFileChange} accept="image/*" disabled={isProcessing} />
             </div>
           </div>
           
@@ -242,9 +284,9 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete }) => {
                 </div>
               )}
           </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">3. Describe the Scene</label>
+        </div>
+        <div className="bg-gray-800/50 p-6 rounded-lg space-y-4 border border-gray-700">
+            <label className="block text-sm font-medium text-gray-300">3. Describe the Scene</label>
             <PromptAssistant
               prompt={prompt}
               setPrompt={setPrompt}
@@ -254,8 +296,11 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete }) => {
               disabledOptions={disabledOptions}
               disclaimer="AI results may vary and might not perfectly match all selected traits. We are continuously working to improve representation."
             />
-          </div>
-
+        </div>
+      </div>
+      
+      {/* Action Button */}
+      <div className="space-y-4">
           {error ? (
             <button
               onClick={handleSubmit}
@@ -275,7 +320,7 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete }) => {
           )}
           {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
           
-          <div className="mt-6 p-4 bg-gray-900/70 rounded-lg border border-amber-500/30">
+          <div className="p-4 bg-gray-900/70 rounded-lg border border-amber-500/30">
             <div className="flex items-start gap-3">
               <div className="text-amber-400 pt-1">
                 <InformationCircleIcon />
@@ -290,44 +335,43 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete }) => {
               </div>
             </div>
           </div>
-        </div>
+      </div>
 
-        {/* Image Display */}
-        <div className="grid grid-cols-1 gap-4">
-          <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
-            <h3 className="text-lg font-semibold mb-2 text-gray-300">Original</h3>
-            <div className="aspect-w-1 aspect-h-1 w-full bg-gray-900 rounded-md overflow-hidden flex items-center justify-center">
-              {isProcessing ? <Spinner /> : originalImage ? (
-                <img src={originalImage} alt="Original upload" className="object-contain h-full w-full cursor-pointer" onClick={() => openModal(originalImage)} />
-              ) : (
-                <p className="text-gray-500">Your image will appear here</p>
-              )}
-            </div>
-          </div>
-          <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700 flex flex-col">
+      {/* AI Generated Result */}
+      {(isLoading || history.length > 0) && (
+        <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700 flex flex-col">
             <div className="flex justify-between items-center mb-2">
-              <h3 className="text-lg font-semibold text-gray-300">AI Generated</h3>
-              {editedImage && (
+              <div className="flex items-center gap-4">
+                <h3 className="text-lg font-semibold text-gray-300">AI Generated</h3>
+                <div className="flex items-center gap-2">
+                  <button onClick={handleUndo} disabled={!canUndo} className="p-1 rounded-full bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed text-gray-300 transition-colors">
+                    <UndoIcon />
+                  </button>
+                  <button onClick={handleRedo} disabled={!canRedo} className="p-1 rounded-full bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed text-gray-300 transition-colors">
+                    <RedoIcon />
+                  </button>
+                </div>
+              </div>
+              {currentImage && (
                 <button
-                  onClick={() => handleDownload(editedImage, 'jenga-biashara-edited.png')}
+                  onClick={() => handleDownload(currentImage, 'jenga-biashara-edited.png')}
                   className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-gray-900 font-bold py-2 px-3 rounded-lg transition duration-300 text-sm"
                 >
                   <ArrowDownTrayIcon />
-                  <span className="hidden sm:inline">Download</span>
+                  <span>Download</span>
                 </button>
               )}
             </div>
-            <div className="aspect-w-1 aspect-h-1 w-full bg-gray-900 rounded-md overflow-hidden flex items-center justify-center flex-grow">
+            <div className="aspect-w-1 aspect-h-1 w-full bg-gray-900 rounded-md overflow-hidden flex items-center justify-center flex-grow min-h-[200px]">
               {isLoading && <Spinner />}
-              {!isLoading && editedImage && (
-                <img src={editedImage} alt="AI edited result" className="object-contain h-full w-full cursor-pointer" onClick={() => openModal(editedImage)}/>
+              {!isLoading && currentImage && (
+                <img src={currentImage} alt="AI edited result" className="object-contain h-full w-full cursor-pointer" onClick={() => openModal(currentImage)}/>
               )}
-               {!isLoading && !editedImage && <p className="text-gray-500">Your final photo will appear here</p>}
             </div>
              <p className="text-xs text-gray-500 mt-2 text-center">Generated models are AI composites, not real people. They should not be used for misrepresentation.</p>
-          </div>
         </div>
-      </div>
+      )}
+
       <ImageModal isOpen={!!modalImageUrl} imageUrl={modalImageUrl} onClose={closeModal} />
     </div>
   );
