@@ -98,11 +98,11 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ isOpen, onClose, onCaptur
         className="relative w-full h-full p-4 flex flex-col items-center justify-center"
         style={{ animation: 'scale-in 0.2s ease-out forwards' }}
       >
-        <div className="w-full max-w-4xl max-h-[85vh] aspect-video bg-black rounded-lg overflow-hidden relative flex items-center justify-center">
+        <div className="w-full max-w-4xl max-h-[85vh] bg-black rounded-lg overflow-hidden relative flex items-center justify-center">
             {isLoading && <Spinner />}
             {error && <p className="text-red-400 p-4 text-center">{error}</p>}
             {!error && !capturedImage && (
-              <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />
+              <video ref={videoRef} autoPlay playsInline className="w-full h-full object-contain" />
             )}
             {capturedImage && (
               <img src={capturedImage} alt="Captured preview" className="w-full h-full object-contain" />

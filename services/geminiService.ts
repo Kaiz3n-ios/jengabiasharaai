@@ -85,7 +85,13 @@ export const generateVideoAd = async (prompt: string, base64ImageData?: string, 
     },
   });
 
+  const MAX_WAIT_MS = 5 * 60 * 1000; // 5 minutes
+  const startTime = Date.now();
+
   while (!operation.done) {
+    if (Date.now() - startTime > MAX_WAIT_MS) {
+      throw new Error("Video generation timed out after 5 minutes. Please try a simpler prompt or try again later.");
+    }
     await new Promise(resolve => setTimeout(resolve, 10000));
     operation = await ai.operations.getVideosOperation({ operation: operation });
   }

@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback } from 'react';
 import { dataUrlToParts } from '../services/utils';
 import { generateAdScene } from '../services/geminiService';
@@ -19,6 +20,8 @@ const adGeneratorCategories = [
   { title: 'Body Archetype', key: 'bodyArchetype', options: ['Slender', 'Curvy', 'Athletic', 'Plus-size'] },
   { title: 'Location', key: 'location', options: ['Nairobi', 'Lagos', 'Cape Town'], allowCustom: true },
 ];
+
+const MAX_HISTORY_SIZE = 10;
 
 const AdGenerator: React.FC<AdGeneratorProps> = ({ photoShootResult, showToast }) => {
   const [prompt, setPrompt] = useState<string>("");
@@ -99,6 +102,11 @@ const AdGenerator: React.FC<AdGeneratorProps> = ({ photoShootResult, showToast }
 
       const newHistory = history.slice(0, historyIndex + 1);
       const updatedHistory = [...newHistory, resultUrl];
+
+      if (updatedHistory.length > MAX_HISTORY_SIZE) {
+        updatedHistory.shift();
+      }
+
       setHistory(updatedHistory);
       setHistoryIndex(updatedHistory.length - 1);
 

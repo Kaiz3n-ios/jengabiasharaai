@@ -101,7 +101,10 @@ const VideoGenerator: React.FC<VideoGeneratorProps> = ({ photoShootResult }) => 
         if (e.message?.includes("Requested entity was not found.")) {
             setError("API Key not found. Please select your key again.");
             setIsKeySelected(false);
-        } else {
+        } else if (e.message?.includes("timed out")) {
+            setError(e.message);
+        }
+        else {
             setError("Failed to generate video. Please try again.");
             console.error(e);
         }

@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useEffect } from 'react';
 import { fileToDataUrl, fileToBase64 } from '../services/utils';
 import { editImageWithPrompt } from '../services/geminiService';
@@ -21,6 +22,8 @@ const imageEditorCategories = [
   { title: 'Lighting', key: 'lighting', options: ['Bright studio lighting', 'Golden hour sunlight', 'Soft natural light'] },
 ];
 
+const MAX_HISTORY_SIZE = 10;
+
 const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete, showToast }) => {
   const [originalImage, setOriginalImage] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>([]);
@@ -36,10 +39,17 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete, showToa
   const [error, setError] = useState<string | null>(null);
   const [modalImageUrl, setModalImageUrl] = useState<string | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState<boolean>(false);
+  const [isCameraSupported, setIsCameraSupported] = useState<boolean>(false);
 
   const currentImage = history[historyIndex];
   const canUndo = historyIndex > 0;
   const canRedo = historyIndex < history.length - 1;
+
+  useEffect(() => {
+    if (navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function') {
+      setIsCameraSupported(true);
+    }
+  }, []);
 
   useEffect(() => {
       if (currentImage) {
@@ -165,26 +175,33 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete, showToa
       const productBase64 = await fileToBase64(file);
       let modelBase64: string | undefined;
       let modelMimeType: string | undefined;
-      
+
       if(modelFile) {
         modelBase64 = await fileToBase64(modelFile);
         modelMimeType = modelFile.type;
       }
       
-      const resultBase64 = await editImageWithPrompt(productBase64, file.type, prompt, modelBase64, modelMimeType);
+      const currentPrompt = imageEditorTemplate(selections);
+      const resultBase64 = await editImageWithPrompt(productBase64, file.type, currentPrompt, modelBase64, modelMimeType);
       const resultUrl = `data:image/png;base64,${resultBase64}`;
-      
+
       const newHistory = history.slice(0, historyIndex + 1);
       const updatedHistory = [...newHistory, resultUrl];
+      
+      if (updatedHistory.length > MAX_HISTORY_SIZE) {
+        updatedHistory.shift();
+      }
+
       setHistory(updatedHistory);
       setHistoryIndex(updatedHistory.length - 1);
+
     } catch (e) {
-      setError("Failed to edit image. Please try again.");
+      setError("Failed to generate image. This can sometimes happen with complex edits. Try simplifying your prompt or using a different background.");
       console.error(e);
     } finally {
       setIsLoading(false);
     }
-  }, [file, prompt, modelFile, hasConsent, history, historyIndex]);
+  }, [file, modelFile, hasConsent, selections, history, historyIndex, imageEditorTemplate]);
 
   const handleDownload = (dataUrl: string, filename: string) => {
     const link = document.createElement('a');
@@ -195,6 +212,10 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete, showToa
     document.body.removeChild(link);
     showToast('Download started...');
   };
+
+  const handleCameraCapture = (capturedFile: File) => {
+    processFile(capturedFile);
+  };
   
   const handleUndo = () => {
     if (canUndo) {
@@ -204,151 +225,154 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete, showToa
 
   const handleRedo = () => {
     if (canRedo) {
-        setHistoryIndex(historyIndex - 1);
+        setHistoryIndex(historyIndex + 1);
     }
   };
 
-  const disabledOptions = modelFile ? { 
-    model: 'Disabled when using your own model photo.',
-    ethnicity: 'Disabled when using your own model photo.',
-    bodyArchetype: 'Disabled when using your own model photo.'
-  } : {};
+  const cameraButton = (
+    <button
+      onClick={() => setIsCameraOpen(true)}
+      disabled={!isCameraSupported}
+      className="flex items-center gap-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-2 px-3 rounded-lg transition duration-300 text-sm"
+    >
+      <CameraIcon />
+      <span>Use Camera</span>
+    </button>
+  );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" onPaste={handlePaste}>
       <div className="text-center">
-        <h2 className="text-2xl font-bold text-amber-400">Step 1: The Photo Shoot</h2>
-        <p className="mt-2 text-gray-400">Create your base product image on a virtual model.</p>
+        <h2 className="text-2xl font-bold text-amber-400">Step 1: The Photo Studio</h2>
+        <p className="mt-2 text-gray-400">Upload your product photo to create a professional shoot.</p>
+      </div>
+      
+      {/* Upload & Original Image */}
+      <div className="bg-gray-800/50 p-6 rounded-lg space-y-4 border border-gray-700">
+        <h3 className="text-lg font-semibold text-gray-300">1. Your Product Photo</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
+          <div 
+            className="w-full h-48 border-2 border-dashed border-gray-600 rounded-lg flex flex-col items-center justify-center text-center p-4 hover:border-amber-400 transition-colors"
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                processFile(e.dataTransfer.files[0]);
+              }
+            }}
+          >
+            <input type="file" id="file-upload" className="hidden" onChange={handleFileChange} accept="image/*" />
+            <label htmlFor="file-upload" className="cursor-pointer text-gray-400">
+              <p>Drag & drop your image here</p>
+              <p className="my-2">or</p>
+              <span className="font-bold text-amber-400 hover:text-amber-500">Browse files</span>
+              <p className="text-xs mt-2">You can also paste an image from your clipboard.</p>
+            </label>
+          </div>
+          <div className="w-full h-48 bg-gray-900 rounded-lg flex items-center justify-center overflow-hidden">
+            {isProcessing && <Spinner />}
+            {!isProcessing && originalImage && <img src={originalImage} alt="Original product" className="object-contain h-full w-full cursor-pointer" onClick={() => openModal(originalImage)} />}
+            {!isProcessing && !originalImage && <p className="text-gray-500">Your photo will appear here</p>}
+          </div>
+        </div>
+         <div className="flex items-center gap-4">
+            <p className="text-sm text-gray-400">No photo? No problem.</p>
+            <div title={!isCameraSupported ? "Your browser does not support camera access." : "Use Camera"}>
+                {cameraButton}
+            </div>
+        </div>
+      </div>
+      
+      {/* Optional: Upload Model's Photo */}
+      <div className="bg-gray-800/50 p-6 rounded-lg space-y-4 border border-gray-700">
+          <h3 className="text-lg font-semibold text-gray-300">2. Use Your Own Model (Optional)</h3>
+          <p className="text-sm text-gray-400 -mt-2">Instead of an AI-generated model, you can provide a photo of a person to wear your product.</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
+             <div className="w-full">
+                <input type="file" id="model-file-upload" className="hidden" onChange={handleModelFileChange} accept="image/*" />
+                <label htmlFor="model-file-upload" className="cursor-pointer text-center block w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
+                    Upload Model's Photo
+                </label>
+                <div className="mt-4">
+                    <label htmlFor="model-consent" className="flex items-start gap-3 text-sm text-gray-400">
+                        <input
+                            type="checkbox"
+                            id="model-consent"
+                            checked={hasConsent}
+                            onChange={(e) => setHasConsent(e.target.checked)}
+                            disabled={!modelFile}
+                            className="mt-1 h-4 w-4 rounded border-gray-600 bg-gray-800 text-amber-500 focus:ring-amber-500 focus:ring-offset-gray-800"
+                        />
+                        <span>I confirm I have the consent of the person in this photo to use their image for this purpose.</span>
+                    </label>
+                </div>
+            </div>
+            <div className="w-full h-48 bg-gray-900 rounded-lg flex items-center justify-center overflow-hidden">
+                {modelImagePreview ? (
+                     <img src={modelImagePreview} alt="Model preview" className="object-contain h-full w-full cursor-pointer" onClick={() => openModal(modelImagePreview)} />
+                ) : (
+                    <p className="text-gray-500 p-4 text-center">Your model's photo will appear here</p>
+                )}
+            </div>
+          </div>
       </div>
       
       {/* Controls */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-gray-800/50 p-6 rounded-lg space-y-4 border border-gray-700">
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">1. Upload Your Product Photo</label>
-            <div
-              onPaste={handlePaste}
-              tabIndex={0}
-              className="mt-1 flex flex-col items-center justify-center rounded-md border-2 border-dashed border-gray-600 p-4 transition-colors hover:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-gray-900 min-h-[16rem]"
-            >
-              {isProcessing ? (
-                <div className="text-center py-4">
-                  <Spinner />
-                  <p className="mt-2 text-sm text-gray-400">Processing image...</p>
-                </div>
-              ) : originalImage ? (
-                <div className="relative w-full text-center">
-                  <img
-                    src={originalImage}
-                    alt="Original upload"
-                    className="object-contain max-h-48 mx-auto rounded-md cursor-pointer"
-                    onClick={() => openModal(originalImage)}
-                  />
-                  <label
-                    htmlFor="file-upload"
-                    className="absolute -bottom-2 -right-2 bg-amber-500 text-gray-900 rounded-full p-2 cursor-pointer hover:bg-amber-600 transition-all shadow-lg hover:shadow-xl focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-amber-500"
-                    title="Change photo"
-                  >
-                    <ArrowPathIcon />
-                  </label>
-                </div>
-              ) : (
-                <div className="w-full h-full flex flex-col items-center justify-center text-center p-6">
-                  <svg className="mx-auto h-12 w-12 text-gray-500" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true"><path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                  <div className="mt-4 flex flex-col sm:flex-row flex-wrap justify-center items-center text-sm text-gray-400">
-                    <label htmlFor="file-upload" className="relative cursor-pointer font-medium text-amber-400 hover:text-amber-500">
-                        <span>Click to upload</span>
-                    </label>
-                    <p className="sm:pl-1">or drag, drop, or paste</p>
-                  </div>
-                   <div className="my-2 text-xs text-gray-500">OR</div>
-                   <button
-                        onClick={() => setIsCameraOpen(true)}
-                        className="flex items-center gap-2 bg-gray-700 hover:bg-gray-600 text-gray-200 font-semibold py-2 px-4 rounded-lg transition-colors"
-                    >
-                        <CameraIcon />
-                        Use Camera
-                    </button>
-                </div>
-              )}
-              <input id="file-upload" name="file-upload" type="file" className="sr-only" onChange={handleFileChange} accept="image/*" disabled={isProcessing} />
-            </div>
-          </div>
-          
-           <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">2. (Optional) Use Your Own Model</label>
-              <input id="model-file-upload" type="file" onChange={handleModelFileChange} accept="image/*" className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-gray-600 file:text-gray-200 hover:file:bg-gray-500"/>
-              {modelImagePreview && (
-                <div className="mt-4 space-y-3">
-                    <img src={modelImagePreview} alt="Model Preview" className="rounded-lg max-h-32" />
-                    <div className="flex items-start">
-                        <input id="consent" type="checkbox" checked={hasConsent} onChange={(e) => setHasConsent(e.target.checked)} className="h-4 w-4 text-amber-600 border-gray-500 rounded focus:ring-amber-500 mt-1" />
-                        <label htmlFor="consent" className="ml-2 block text-sm text-gray-300">
-                            I have consent from the person in this photo to use their image for generating new marketing materials.
-                        </label>
-                    </div>
-                </div>
-              )}
-          </div>
-        </div>
-        <div className="bg-gray-800/50 p-6 rounded-lg space-y-4 border border-gray-700">
-            <label className="block text-sm font-medium text-gray-300">3. Describe the Scene</label>
-            <PromptAssistant
-              prompt={prompt}
-              setPrompt={setPrompt}
-              onSelectionsChange={setSelections}
-              optionCategories={imageEditorCategories}
-              promptTemplate={imageEditorTemplate}
-              disabledOptions={disabledOptions}
-              disclaimer="AI results may vary and might not perfectly match all selected traits. We are continuously working to improve representation."
-            />
-        </div>
-      </div>
-      
-      {/* Action Button */}
-      <div className="space-y-4">
-          {error ? (
-            <button
-              onClick={handleSubmit}
-              disabled={isLoading || isProcessing || !file || (!!modelFile && !hasConsent)}
-              className="w-full bg-red-500 hover:bg-red-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center gap-2"
-            >
-              {isLoading ? <Spinner /> : <><ArrowPathIcon /> Retry Generation</>}
-            </button>
-          ) : (
-            <button
-              onClick={handleSubmit}
-              disabled={isLoading || isProcessing || !file || (!!modelFile && !hasConsent)}
-              className="w-full bg-amber-500 hover:bg-amber-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-gray-900 font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center"
-            >
-              {isLoading ? <Spinner /> : 'Generate & Continue'}
-            </button>
-          )}
-          {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
-          
-          <div className="p-4 bg-gray-900/70 rounded-lg border border-amber-500/30">
-            <div className="flex items-start gap-3">
-              <div className="text-amber-400 pt-1">
-                <InformationCircleIcon />
-              </div>
-              <div>
-                <h4 className="text-sm font-semibold text-gray-200">A Note on Responsible Creation</h4>
-                <ul className="mt-2 list-disc list-inside space-y-1 text-xs text-gray-400">
-                  <li>Use these tools to create diverse, positive, and authentic representations. Avoid perpetuating harmful stereotypes.</li>
-                  <li>AI-generated models are not real people and should not be used to misrepresent or impersonate individuals.</li>
-                  <li>You are responsible for the final images you create and share.</li>
-                </ul>
-              </div>
-            </div>
-          </div>
+      <div className="bg-gray-800/50 p-6 rounded-lg space-y-4 border border-gray-700">
+        <h3 className="text-lg font-semibold text-gray-300">3. Your Vision</h3>
+        <PromptAssistant
+          prompt={prompt}
+          setPrompt={setPrompt}
+          optionCategories={imageEditorCategories}
+          promptTemplate={imageEditorTemplate}
+          disabledOptions={modelFile ? { model: "Using your uploaded model photo.", ethnicity: "Using your uploaded model photo.", bodyArchetype: "Using your uploaded model photo." } : {}}
+          onSelectionsChange={setSelections}
+        />
       </div>
 
-      {/* AI Generated Result */}
+      {/* Action Button */}
+      <div className="space-y-4">
+        {error ? (
+          <button
+            onClick={handleSubmit}
+            disabled={isLoading || !file}
+            className="w-full bg-red-500 hover:bg-red-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center gap-2"
+          >
+            {isLoading ? <Spinner /> : <><ArrowPathIcon /> Retry Generation</>}
+          </button>
+        ) : (
+          <button
+            onClick={handleSubmit}
+            disabled={isLoading || !file}
+            className="w-full bg-amber-500 hover:bg-amber-600 disabled:bg-gray-600 text-gray-900 font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center"
+          >
+            {isLoading ? <Spinner /> : 'Generate Photoshoot'}
+          </button>
+        )}
+        {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
+        <div className="p-4 bg-gray-900/70 rounded-lg border border-amber-500/30">
+          <div className="flex items-start gap-3">
+            <div className="text-amber-400 pt-1">
+              <InformationCircleIcon />
+            </div>
+            <div>
+              <h4 className="text-sm font-semibold text-gray-200">A Note on Responsible Creation</h4>
+              <ul className="mt-2 list-disc list-inside space-y-1 text-xs text-gray-400">
+                <li>Use these tools to create diverse, positive, and authentic representations. Avoid perpetuating harmful stereotypes.</li>
+                <li>AI-generated models are not real people and should not be used to misrepresent or impersonate individuals.</li>
+                <li>When using your own model, you are responsible for obtaining their consent.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Generated Photo */}
       {(isLoading || history.length > 0) && (
         <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700 flex flex-col">
-            <div className="flex justify-between items-center mb-2">
-              <div className="flex items-center gap-4">
-                <h3 className="text-lg font-semibold text-gray-300">AI Generated</h3>
+          <div className="flex justify-between items-center mb-2">
+            <div className="flex items-center gap-4">
+              <h3 className="text-lg font-semibold text-gray-300">Generated Photo</h3>
                 <div className="flex items-center gap-2">
                   <button onClick={handleUndo} disabled={!canUndo} className="p-1 rounded-full bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed text-gray-300 transition-colors">
                     <UndoIcon />
@@ -357,33 +381,28 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete, showToa
                     <RedoIcon />
                   </button>
                 </div>
-              </div>
-              {currentImage && (
-                <button
-                  onClick={() => handleDownload(currentImage, 'jenga-biashara-edited.png')}
-                  className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-gray-900 font-bold py-2 px-3 rounded-lg transition duration-300 text-sm"
-                >
-                  <ArrowDownTrayIcon />
-                  <span>Download</span>
-                </button>
-              )}
             </div>
-            <div className="aspect-w-1 aspect-h-1 w-full bg-gray-900 rounded-md overflow-hidden flex items-center justify-center flex-grow min-h-[200px]">
-              {isLoading && <Spinner />}
-              {!isLoading && currentImage && (
-                <img src={currentImage} alt="AI edited result" className="object-contain h-full w-full cursor-pointer" onClick={() => openModal(currentImage)}/>
-              )}
-            </div>
-             <p className="text-xs text-gray-500 mt-2 text-center">Generated models are AI composites, not real people. They should not be used for misrepresentation.</p>
+            {currentImage && (
+              <button
+                onClick={() => handleDownload(currentImage, 'jenga-biashara-product.png')}
+                className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-gray-900 font-bold py-2 px-3 rounded-lg transition duration-300 text-sm"
+              >
+                <ArrowDownTrayIcon />
+                <span>Download</span>
+              </button>
+            )}
+          </div>
+          <div className="aspect-w-1 aspect-h-1 w-full bg-gray-900 rounded-md overflow-hidden flex items-center justify-center flex-grow min-h-[200px]">
+            {isLoading && <Spinner />}
+            {!isLoading && currentImage && (
+              <img src={currentImage} alt="AI generated product" className="object-contain h-full w-full cursor-pointer" onClick={() => openModal(currentImage)} />
+            )}
+          </div>
         </div>
       )}
-
+      
       <ImageModal isOpen={!!modalImageUrl} imageUrl={modalImageUrl} onClose={closeModal} />
-      <CameraCapture 
-        isOpen={isCameraOpen}
-        onClose={() => setIsCameraOpen(false)}
-        onCapture={processFile}
-      />
+      <CameraCapture isOpen={isCameraOpen} onClose={() => setIsCameraOpen(false)} onCapture={handleCameraCapture} />
     </div>
   );
 };
