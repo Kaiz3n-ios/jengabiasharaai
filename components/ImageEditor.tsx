@@ -2,10 +2,11 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { fileToDataUrl, fileToBase64 } from '../services/utils';
 import { editImageWithPrompt } from '../services/geminiService';
 import Spinner from './Spinner';
-import { ArrowDownTrayIcon, InformationCircleIcon, ArrowPathIcon, UndoIcon, RedoIcon } from './IconComponents';
+import { ArrowDownTrayIcon, InformationCircleIcon, ArrowPathIcon, UndoIcon, RedoIcon, CameraIcon } from './IconComponents';
 import ImageModal from './ImageModal';
 import PromptAssistant from './PromptAssistant';
 import { PhotoShootResult } from '../App';
+import CameraCapture from './CameraCapture';
 
 interface ImageEditorProps {
   onGenerationComplete: (result: PhotoShootResult) => void;
@@ -34,6 +35,7 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete, showToa
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [modalImageUrl, setModalImageUrl] = useState<string | null>(null);
+  const [isCameraOpen, setIsCameraOpen] = useState<boolean>(false);
 
   const currentImage = history[historyIndex];
   const canUndo = historyIndex > 0;
@@ -202,7 +204,7 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete, showToa
 
   const handleRedo = () => {
     if (canRedo) {
-        setHistoryIndex(historyIndex + 1);
+        setHistoryIndex(historyIndex - 1);
     }
   };
 
@@ -251,19 +253,23 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete, showToa
                   </label>
                 </div>
               ) : (
-                <label
-                  htmlFor="file-upload"
-                  className="relative cursor-pointer w-full h-full flex flex-col items-center justify-center text-center p-6"
-                >
+                <div className="w-full h-full flex flex-col items-center justify-center text-center p-6">
                   <svg className="mx-auto h-12 w-12 text-gray-500" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true"><path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                  <div className="mt-4 flex flex-wrap justify-center text-sm text-gray-400">
-                    <p className="font-medium text-amber-400">
-                      Click to upload
-                    </p>
-                    <p className="pl-1">or drag, drop, or paste</p>
+                  <div className="mt-4 flex flex-col sm:flex-row flex-wrap justify-center items-center text-sm text-gray-400">
+                    <label htmlFor="file-upload" className="relative cursor-pointer font-medium text-amber-400 hover:text-amber-500">
+                        <span>Click to upload</span>
+                    </label>
+                    <p className="sm:pl-1">or drag, drop, or paste</p>
                   </div>
-                  <p className="mt-1 text-xs text-gray-500">PNG, JPG, GIF up to 10MB</p>
-                </label>
+                   <div className="my-2 text-xs text-gray-500">OR</div>
+                   <button
+                        onClick={() => setIsCameraOpen(true)}
+                        className="flex items-center gap-2 bg-gray-700 hover:bg-gray-600 text-gray-200 font-semibold py-2 px-4 rounded-lg transition-colors"
+                    >
+                        <CameraIcon />
+                        Use Camera
+                    </button>
+                </div>
               )}
               <input id="file-upload" name="file-upload" type="file" className="sr-only" onChange={handleFileChange} accept="image/*" disabled={isProcessing} />
             </div>
@@ -373,6 +379,11 @@ const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete, showToa
       )}
 
       <ImageModal isOpen={!!modalImageUrl} imageUrl={modalImageUrl} onClose={closeModal} />
+      <CameraCapture 
+        isOpen={isCameraOpen}
+        onClose={() => setIsCameraOpen(false)}
+        onCapture={processFile}
+      />
     </div>
   );
 };
