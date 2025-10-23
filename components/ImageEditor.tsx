@@ -1,0 +1,336 @@
+import React, { useState, useCallback } from 'react';
+import { fileToDataUrl, fileToBase64 } from '../services/utils';
+import { editImageWithPrompt } from '../services/geminiService';
+import Spinner from './Spinner';
+import { ArrowDownTrayIcon, InformationCircleIcon, ArrowPathIcon } from './IconComponents';
+import ImageModal from './ImageModal';
+import PromptAssistant from './PromptAssistant';
+import { PhotoShootResult } from '../App';
+
+interface ImageEditorProps {
+  onGenerationComplete: (result: PhotoShootResult) => void;
+}
+
+const imageEditorCategories = [
+  { title: 'Model Type', key: 'model', options: ['Professional female model', 'Professional male model', 'Realistic mannequin'] },
+  { title: 'Ethnicity', key: 'ethnicity', options: ['Black African', 'East African', 'West African', 'North African'] },
+  { title: 'Body Archetype', key: 'bodyArchetype', options: ['Slender', 'Curvy', 'Athletic', 'Plus-size'] },
+  { title: 'Background', key: 'background', options: ['Clean studio background', 'Outdoor nature scene', 'Urban cityscape', 'Beach setting'] },
+  { title: 'Lighting', key: 'lighting', options: ['Bright studio lighting', 'Golden hour sunlight', 'Soft natural light'] },
+];
+
+const ImageEditor: React.FC<ImageEditorProps> = ({ onGenerationComplete }) => {
+  const [originalImage, setOriginalImage] = useState<string | null>(null);
+  const [editedImage, setEditedImage] = useState<string | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [modelFile, setModelFile] = useState<File | null>(null);
+  const [modelImagePreview, setModelImagePreview] = useState<string | null>(null);
+  const [hasConsent, setHasConsent] = useState<boolean>(false);
+  const [prompt, setPrompt] = useState<string>('');
+  const [selections, setSelections] = useState<Record<string, string>>({});
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [modalImageUrl, setModalImageUrl] = useState<string | null>(null);
+
+  const openModal = (url: string) => setModalImageUrl(url);
+  const closeModal = () => setModalImageUrl(null);
+
+  const imageEditorTemplate = useCallback((options: Record<string, string>) => {
+    const coreInstruction = `**OUTPUT MUST BE AN IMAGE.** You are an expert fashion e-commerce photographer and retoucher. Your task is to create a single, ultra-realistic, photorealistic, 8K image.`;
+
+    let actionAndSubject: string;
+
+    if (modelFile) {
+        actionAndSubject = `
+**Action:** Composite the two input images.
+- **Input Image 1 (Product):** Contains the clothing article.
+- **Input Image 2 (Model):** Contains the person.
+- **Task:** Place the product from Input Image 1 onto the person from Input Image 2. The fit must be perfect, tailored, and realistic, with accurate shadows and fabric draping.
+        `;
+    } else {
+        const modelDescription = [
+            `A ${options.ethnicity || 'Black African'}`,
+            `${options.bodyArchetype || 'Slender'}`,
+            `${options.model || 'professional female model'}`
+        ].join(', ');
+
+        actionAndSubject = `
+**Action:** Generate a new image based on the input product image.
+- **Input Image 1 (Product):** Contains the clothing article.
+- **Task:** Generate a full-body image of a ${modelDescription} wearing the exact product from Input Image 1.
+        `;
+    }
+
+    const sceneDescription = `
+**Scene:** A professional photoshoot set against a ${options.background || 'Clean studio background'}.
+**Lighting:** ${options.lighting || 'Bright studio lighting'}, creating a high-end commercial look.
+    `;
+    
+    const fidelityMandate = `
+**Fidelity Mandate (CRITICAL):**
+- You MUST preserve the exact design, pattern, color, texture, and details of the clothing from the input image.
+- You MUST preserve the exact cut, length, and style of the clothing. For example, if the input is a short dress, the output must be a short dress of the same length.
+- **DO NOT alter the garment's design in any way.** Your task is to place it on a model, not redesign it.
+    `;
+
+    return [coreInstruction, actionAndSubject, sceneDescription, fidelityMandate].join('\n\n');
+  }, [modelFile]);
+
+  const processFile = useCallback(async (selectedFile: File) => {
+    setFile(null);
+    setOriginalImage(null);
+    setEditedImage(null);
+    setError(null);
+    setIsProcessing(true);
+
+    try {
+      const dataUrl = await fileToDataUrl(selectedFile);
+      setFile(selectedFile);
+      setOriginalImage(dataUrl);
+    } catch (err) {
+      setError("Could not read the selected file. Please try another image.");
+      console.error(err);
+    } finally {
+      setIsProcessing(false);
+    }
+  }, []);
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files && event.target.files[0]) {
+      processFile(event.target.files[0]);
+    }
+  };
+  
+  const handleModelFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files && event.target.files[0]) {
+        const selectedFile = event.target.files[0];
+        setModelFile(selectedFile);
+        setHasConsent(false); // Reset consent when new image is uploaded
+        try {
+            const dataUrl = await fileToDataUrl(selectedFile);
+            setModelImagePreview(dataUrl);
+        } catch (err) {
+            setError("Could not read the model's photo.");
+            console.error(err);
+        }
+    }
+  };
+
+  const handlePaste = useCallback((event: React.ClipboardEvent<HTMLElement>) => {
+    const items = event.clipboardData.items;
+    let imageFile: File | null = null;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        imageFile = item.getAsFile();
+        break;
+      }
+    }
+
+    if (imageFile) {
+      event.preventDefault();
+      processFile(imageFile);
+    }
+  }, [processFile]);
+
+  const handleSubmit = useCallback(async () => {
+    if (!file) {
+      setError("Please upload a product image first.");
+      return;
+    }
+    if(modelFile && !hasConsent) {
+      setError("You must confirm you have consent to use the model's photo.");
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+    setEditedImage(null);
+
+    try {
+      const productBase64 = await fileToBase64(file);
+      let modelBase64: string | undefined;
+      let modelMimeType: string | undefined;
+      
+      if(modelFile) {
+        modelBase64 = await fileToBase64(modelFile);
+        modelMimeType = modelFile.type;
+      }
+      
+      const resultBase64 = await editImageWithPrompt(productBase64, file.type, prompt, modelBase64, modelMimeType);
+      const resultUrl = `data:image/png;base64,${resultBase64}`;
+      setEditedImage(resultUrl);
+      onGenerationComplete({ imageUrl: resultUrl, selections });
+    } catch (e) {
+      setError("Failed to edit image. Please try again.");
+      console.error(e);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [file, prompt, modelFile, hasConsent, selections, onGenerationComplete]);
+
+  const handleDownload = (dataUrl: string, filename: string) => {
+    const link = document.createElement('a');
+    link.href = dataUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+  
+  const disabledOptions = modelFile ? { 
+    model: 'Disabled when using your own model photo.',
+    ethnicity: 'Disabled when using your own model photo.',
+    bodyArchetype: 'Disabled when using your own model photo.'
+  } : {};
+
+  return (
+    <div className="space-y-6">
+      <div className="text-center">
+        <h2 className="text-2xl font-bold text-amber-400">Step 1: The Photo Shoot</h2>
+        <p className="mt-2 text-gray-400">Create your base product image on a virtual model.</p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Input & Controls */}
+        <div className="bg-gray-800/50 p-6 rounded-lg space-y-4 border border-gray-700">
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">1. Upload Your Product Photo</label>
+            <div
+              onPaste={handlePaste}
+              tabIndex={0}
+              className="mt-1 flex flex-col items-center justify-center rounded-md border-2 border-dashed border-gray-600 px-6 pt-5 pb-6 transition-colors hover:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-gray-900"
+            >
+              <label
+                htmlFor="file-upload"
+                className="relative cursor-pointer w-full h-full flex flex-col items-center justify-center"
+              >
+              {isProcessing ? (
+                <div className="text-center py-4">
+                  <Spinner />
+                  <p className="mt-2 text-sm text-gray-400">Processing image...</p>
+                </div>
+              ) : (
+                <div className="space-y-1 text-center">
+                  <svg className="mx-auto h-12 w-12 text-gray-500" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true"><path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                  <div className="flex text-sm text-gray-400">
+                    <p className="font-medium text-amber-400">
+                      Click to upload
+                    </p>
+                    <p className="pl-1">or drag, drop, or paste</p>
+                  </div>
+                  <p className="text-xs text-gray-500">PNG, JPG, GIF up to 10MB</p>
+                </div>
+              )}
+                <input id="file-upload" name="file-upload" type="file" className="sr-only" onChange={handleFileChange} accept="image/*" disabled={isProcessing} />
+              </label>
+            </div>
+          </div>
+          
+           <div>
+              <label className="block text-sm font-medium text-gray-300 mb-2">2. (Optional) Use Your Own Model</label>
+              <input id="model-file-upload" type="file" onChange={handleModelFileChange} accept="image/*" className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-gray-600 file:text-gray-200 hover:file:bg-gray-500"/>
+              {modelImagePreview && (
+                <div className="mt-4 space-y-3">
+                    <img src={modelImagePreview} alt="Model Preview" className="rounded-lg max-h-32" />
+                    <div className="flex items-start">
+                        <input id="consent" type="checkbox" checked={hasConsent} onChange={(e) => setHasConsent(e.target.checked)} className="h-4 w-4 text-amber-600 border-gray-500 rounded focus:ring-amber-500 mt-1" />
+                        <label htmlFor="consent" className="ml-2 block text-sm text-gray-300">
+                            I have consent from the person in this photo to use their image for generating new marketing materials.
+                        </label>
+                    </div>
+                </div>
+              )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">3. Describe the Scene</label>
+            <PromptAssistant
+              prompt={prompt}
+              setPrompt={setPrompt}
+              onSelectionsChange={setSelections}
+              optionCategories={imageEditorCategories}
+              promptTemplate={imageEditorTemplate}
+              disabledOptions={disabledOptions}
+              disclaimer="AI results may vary and might not perfectly match all selected traits. We are continuously working to improve representation."
+            />
+          </div>
+
+          {error ? (
+            <button
+              onClick={handleSubmit}
+              disabled={isLoading || isProcessing || !file || (!!modelFile && !hasConsent)}
+              className="w-full bg-red-500 hover:bg-red-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center gap-2"
+            >
+              {isLoading ? <Spinner /> : <><ArrowPathIcon /> Retry Generation</>}
+            </button>
+          ) : (
+            <button
+              onClick={handleSubmit}
+              disabled={isLoading || isProcessing || !file || (!!modelFile && !hasConsent)}
+              className="w-full bg-amber-500 hover:bg-amber-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-gray-900 font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center"
+            >
+              {isLoading ? <Spinner /> : 'Generate & Continue'}
+            </button>
+          )}
+          {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
+          
+          <div className="mt-6 p-4 bg-gray-900/70 rounded-lg border border-amber-500/30">
+            <div className="flex items-start gap-3">
+              <div className="text-amber-400 pt-1">
+                <InformationCircleIcon />
+              </div>
+              <div>
+                <h4 className="text-sm font-semibold text-gray-200">A Note on Responsible Creation</h4>
+                <ul className="mt-2 list-disc list-inside space-y-1 text-xs text-gray-400">
+                  <li>Use these tools to create diverse, positive, and authentic representations. Avoid perpetuating harmful stereotypes.</li>
+                  <li>AI-generated models are not real people and should not be used to misrepresent or impersonate individuals.</li>
+                  <li>You are responsible for the final images you create and share.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Image Display */}
+        <div className="grid grid-cols-1 gap-4">
+          <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
+            <h3 className="text-lg font-semibold mb-2 text-gray-300">Original</h3>
+            <div className="aspect-w-1 aspect-h-1 w-full bg-gray-900 rounded-md overflow-hidden flex items-center justify-center">
+              {isProcessing ? <Spinner /> : originalImage ? (
+                <img src={originalImage} alt="Original upload" className="object-contain h-full w-full cursor-pointer" onClick={() => openModal(originalImage)} />
+              ) : (
+                <p className="text-gray-500">Your image will appear here</p>
+              )}
+            </div>
+          </div>
+          <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700 flex flex-col">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="text-lg font-semibold text-gray-300">AI Generated</h3>
+              {editedImage && (
+                <button
+                  onClick={() => handleDownload(editedImage, 'jenga-biashara-edited.png')}
+                  className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-gray-900 font-bold py-2 px-3 rounded-lg transition duration-300 text-sm"
+                >
+                  <ArrowDownTrayIcon />
+                  <span className="hidden sm:inline">Download</span>
+                </button>
+              )}
+            </div>
+            <div className="aspect-w-1 aspect-h-1 w-full bg-gray-900 rounded-md overflow-hidden flex items-center justify-center flex-grow">
+              {isLoading && <Spinner />}
+              {!isLoading && editedImage && (
+                <img src={editedImage} alt="AI edited result" className="object-contain h-full w-full cursor-pointer" onClick={() => openModal(editedImage)}/>
+              )}
+               {!isLoading && !editedImage && <p className="text-gray-500">Your final photo will appear here</p>}
+            </div>
+             <p className="text-xs text-gray-500 mt-2 text-center">Generated models are AI composites, not real people. They should not be used for misrepresentation.</p>
+          </div>
+        </div>
+      </div>
+      <ImageModal isOpen={!!modalImageUrl} imageUrl={modalImageUrl} onClose={closeModal} />
+    </div>
+  );
+};
+
+export default ImageEditor;
